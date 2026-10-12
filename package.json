@@ -1,0 +1,16 @@
+{
+  "name": "kj-rock-paper-scissors",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.37.0"
+  }
+}
