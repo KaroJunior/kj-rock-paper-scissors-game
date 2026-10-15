@@ -5,7 +5,16 @@
 //   GET  /api/match/:id                                  -> filtered match view
 //   POST /api/purchase/claim         { purchaseId }      -> { ok, granted, ... }
 //   GET  /api/purchase/entitlements                      -> { entitlements }
-import { issueToken, requirePlayer } from './_lib/auth.mjs';
+//   POST /api/admin/login            { username, password } -> { ok } + cookie
+//   POST /api/admin/logout                               -> { ok } + clears cookie
+//   GET  /api/admin/stats                                -> dashboard JSON (cookie auth)
+import crypto from 'node:crypto';
+import {
+  issueToken, requirePlayer,
+  issueAdminToken, requireAdminFromCookie,
+  ADMIN_COOKIE, ADMIN_COOKIE_MAX_AGE,
+} from './_lib/auth.mjs';
+import { getDb } from './_lib/firebase.mjs';
 import { isValidChoice, determineWinner, normaliseVatarPlayer } from './_lib/rps.mjs';
 import * as Vatar from './_lib/vatar.mjs';
 import {
@@ -14,8 +23,12 @@ import {
 } from './_lib/matches.mjs';
 import { grantEntitlementOnce, getEntitlements } from './_lib/purchases.mjs';
 
-const json = (body, status = 200) => new Response(JSON.stringify(body), {
-  status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+const json = (body, status = 200, extraHeaders = {}) => new Response(JSON.stringify(body), {
+  status, headers: {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    ...extraHeaders,
+  },
 });
 const err  = (msg, status = 400) => json({ error: msg }, status);
 const unauth = () => err('unauthorized', 401);
@@ -141,7 +154,6 @@ async function claimPurchase(req, claims) {
   if (typeof b?.purchaseId !== 'string' || !b.purchaseId) return err('missing purchaseId');
   if (b.purchaseId.length > 128) return err('bad purchaseId');
 
-  // 1. Ask Vatar. Client claims are never trusted.
   const r = await Vatar.getPurchase(b.purchaseId);
   if (!r.ok) {
     if (r.http === 404) return nf('purchase not found');
@@ -149,17 +161,12 @@ async function claimPurchase(req, claims) {
   }
   const p = r.data || {};
 
-  // 2. Must belong to this player.
   if (p.playerId !== claims.playerId) return err('not your purchase', 403);
-
-  // 3. Status gate.
   if (p.status === 'refunded') return err('refunded', 409);
   if (p.status !== 'paid' && p.status !== 'delivered') return err('not paid', 409);
 
-  // 4. Idempotent grant.
   const { granted } = await grantEntitlementOnce(claims.playerId, p.productId, p.id);
 
-  // 5. Mark delivered (safe to repeat). A refunded purchase is 409 — treat as failure.
   let delivered = { ok: true, http: 200 };
   if (p.status !== 'delivered') {
     delivered = await Vatar.deliverPurchase(p.id);
@@ -178,6 +185,98 @@ async function claimPurchase(req, claims) {
 async function listEntitlements(_req, claims) {
   const ents = await getEntitlements(claims.playerId);
   return json({ entitlements: ents });
+}
+
+// ---------- admin ----------
+
+function secureCompare(a, b) {
+  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
+}
+
+function checkAdminCreds(user, pass) {
+  const U = process.env.ADMIN_USER, P = process.env.ADMIN_PASSWORD;
+  if (!U || !P) return false;
+  return secureCompare(user, U) && secureCompare(pass, P);
+}
+
+function adminCookieHeader(req, token) {
+  const host = (req.headers.get('host') || '').toLowerCase();
+  const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+  const secureFlag = isLocal ? '' : '; Secure';
+  if (token) {
+    return `${ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${ADMIN_COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict${secureFlag}`;
+  }
+  return `${ADMIN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict${secureFlag}`;
+}
+
+async function adminLogin(req) {
+  const b = await readBody(req);
+  const { username = '', password = '' } = b || {};
+  if (!checkAdminCreds(username, password)) return err('invalid_credentials', 401);
+  const token = issueAdminToken();
+  return json({ ok: true }, 200, { 'set-cookie': adminCookieHeader(req, token) });
+}
+
+async function adminLogout(req) {
+  return json({ ok: true }, 200, { 'set-cookie': adminCookieHeader(req, null) });
+}
+
+async function loadAdminStats() {
+  const db = getDb();
+  const snap = await db.collection('vatar_matches').orderBy('startedAt', 'desc').limit(500).get();
+
+  let total = 0, waiting = 0, active = 0, resolved = 0, friendly = 0, staked = 0, roundsCompleted = 0;
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  let last24h = 0;
+  const recent = [];
+  const errors = [];
+
+  snap.forEach((doc) => {
+    const m = doc.data();
+    total++;
+    if (m.status === 'active')   active++;
+    else if (m.status === 'resolved') resolved++;
+    else if (m.status === 'waiting')  waiting++;
+    if (m.stake === 0) friendly++; else staked++;
+    if (m.startedAt && m.startedAt >= since) last24h++;
+    if (Array.isArray(m.rounds)) roundsCompleted += m.rounds.filter((r) => r.status === 'complete').length;
+    else if (m.status === 'resolved') roundsCompleted++;
+
+    if (m.status === 'resolved' && recent.length < 8) {
+      recent.push({
+        code: m.code || m.matchId?.slice(0, 8) || '—',
+        mode: m.mode || 'test',
+        result: m.winner === 'draw' ? 'draw' : 'settled',
+      });
+    }
+    if (m.vatarResult && (m.vatarResult.http >= 400 || m.vatarResult.ok === false) && errors.length < 8) {
+      errors.push({
+        code: m.code || m.matchId?.slice(0, 8) || '—',
+        result: 'http ' + (m.vatarResult.http ?? '?'),
+      });
+    }
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    matches: { total, active, resolved, waiting, friendly, staked },
+    roundsCompleted,
+    matchesLast24h: last24h,
+    recent,
+    errors,
+  };
+}
+
+async function adminStats(req) {
+  if (!requireAdminFromCookie(req)) return unauth();
+  try {
+    const stats = await loadAdminStats();
+    return json(stats);
+  } catch (e) {
+    console.error('admin stats error', e);
+    return json({ error: 'server_error' }, 500);
+  }
 }
 
 // ---------- router ----------
@@ -207,6 +306,13 @@ async function route(req) {
   if (parts[1] === 'purchase' && parts[2] === 'entitlements' && method === 'GET') {
     const claims = requirePlayer(req); if (!claims) return unauth();
     return listEntitlements(req, claims);
+  }
+
+  if (parts[1] === 'admin') {
+    if (parts[2] === 'login'  && method === 'POST') return adminLogin(req);
+    if (parts[2] === 'logout' && method === 'POST') return adminLogout(req);
+    if (parts[2] === 'stats'  && method === 'GET')  return adminStats(req);
+    return nf();
   }
 
   return nf();

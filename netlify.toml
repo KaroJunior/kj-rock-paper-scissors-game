@@ -5,15 +5,15 @@
 [functions]
   node_bundler = "esbuild"
 
-# Redirect /admin/* to the admin function (clean URL).
+# Serve the static admin SPA for any /admin* path. Browser URL is preserved.
 [[redirects]]
   from = "/admin"
-  to = "/.netlify/functions/admin"
+  to = "/admin.html"
   status = 200
 
 [[redirects]]
   from = "/admin/*"
-  to = "/.netlify/functions/admin"
+  to = "/admin.html"
   status = 200
 
 [[headers]]
@@ -24,9 +24,22 @@
     Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), clipboard-read=(), clipboard-write=()"
     Content-Security-Policy = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://lagoslife.app; connect-src 'self' https://lagoslife.app https://www.lagoslife.app https://naijalife.app https://www.naijalife.app https://lagoslife.eliysites.com; font-src 'self'; frame-ancestors https://lagoslife.app https://www.lagoslife.app https://naijalife.app https://www.naijalife.app https://lagoslife.eliysites.com"
 
-# Admin pages are not framed.
+# Admin pages are not framed. Applies both to the rewrite source (/admin*)
+# and to the direct file (/admin.html).
+[[headers]]
+  for = "/admin"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    Cache-Control = "no-store"
+
 [[headers]]
   for = "/admin/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    Cache-Control = "no-store"
+
+[[headers]]
+  for = "/admin.html"
   [headers.values]
     X-Frame-Options = "DENY"
     Cache-Control = "no-store"
