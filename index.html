@@ -1,126 +1,166 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rock Paper Scissors</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Rock Paper Scissors · Karo Junior</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://lagoslife.app/sdk/vatar-games-v1.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1>Rock Paper Scissors</h1>
+  <div id="app" class="shell">
 
-        <div class="game-modes">
-            <button class="mode-btn active" data-action="show-screen" data-screen="single-player">Single Player</button>
-            <button class="mode-btn" data-action="show-screen" data-screen="multiplayer">Multiplayer</button>
+    <!-- ============ MENU ============ -->
+    <section id="screen-menu" class="screen" data-screen="menu">
+      <header class="masthead">
+        <div class="brand">
+          <div class="brand-mark">RPS</div>
+          <div class="brand-text">
+            <h1>Rock<br/>Paper<br/>Scissors</h1>
+            <p class="brand-by">by Karo Junior</p>
+          </div>
+        </div>
+      </header>
+
+      <div class="menu">
+        <button class="menu-btn" data-action="goto" data-screen="single">
+          <span class="menu-num">01</span>
+          <span class="menu-label">Play the Computer</span>
+          <span class="menu-arrow">→</span>
+        </button>
+        <button class="menu-btn" data-action="goto" data-screen="mp">
+          <span class="menu-num">02</span>
+          <span class="menu-label">Multiplayer</span>
+          <span class="menu-arrow">→</span>
+        </button>
+      </div>
+
+      <footer class="stamp">
+        <span id="env-badge" class="env-badge">—</span>
+        <span id="whoami" class="whoami"></span>
+      </footer>
+    </section>
+
+    <!-- ============ SINGLE PLAYER ============ -->
+    <section id="screen-single" class="screen" data-screen="single">
+      <header class="bar">
+        <button class="back" data-action="goto" data-screen="menu" aria-label="Back">←</button>
+        <h2>vs Computer</h2>
+        <div class="score-inline">
+          <span>You <b id="sp-you">0</b></span>
+          <span class="dot">·</span>
+          <span>CPU <b id="sp-cpu">0</b></span>
+        </div>
+      </header>
+
+      <div class="arena">
+        <div class="slot" id="sp-p1">?</div>
+        <div class="vs">VS</div>
+        <div class="slot" id="sp-p2">?</div>
+      </div>
+
+      <div class="verdict" id="sp-verdict">Pick your move.</div>
+
+      <div class="moves">
+        <button class="move" data-action="sp-play" data-choice="rock" aria-label="Rock">✊</button>
+        <button class="move" data-action="sp-play" data-choice="paper" aria-label="Paper">✋</button>
+        <button class="move" data-action="sp-play" data-choice="scissors" aria-label="Scissors">✌️</button>
+      </div>
+
+      <div class="tape" id="sp-tape"></div>
+    </section>
+
+    <!-- ============ MULTIPLAYER — LOBBY ============ -->
+    <section id="screen-mp" class="screen" data-screen="mp">
+      <header class="bar">
+        <button class="back" data-action="goto" data-screen="menu" aria-label="Back">←</button>
+        <h2>Multiplayer</h2>
+        <span class="hint" id="mp-mode-hint">Friendly</span>
+      </header>
+
+      <div id="mp-offline" class="panel panel-warn" hidden>
+        <p><strong>Multiplayer runs inside Lagos Life.</strong></p>
+        <p>Open this game from the Lagos Life Games app to play with another player.</p>
+        <p>Single player still works here.</p>
+      </div>
+
+      <div id="mp-lobby" hidden>
+        <div class="panel">
+          <p class="eyebrow">Choose a match type</p>
+          <div class="seg" role="radiogroup" aria-label="Match type">
+            <button class="seg-item is-on" data-action="mp-set-stake" data-stake="0" role="radio" aria-checked="true">
+              <span class="seg-label">Friendly</span>
+              <span class="seg-sub">No stake</span>
+            </button>
+            <button class="seg-item" data-action="mp-set-stake" data-stake="staked" role="radio" aria-checked="false" id="mp-staked-btn" disabled>
+              <span class="seg-label">Staked</span>
+              <span class="seg-sub">Needs approval</span>
+            </button>
+          </div>
         </div>
 
-        <!-- Single Player Screen -->
-        <div id="single-player" class="game-screen active-screen">
-            <h2>Play Against Computer</h2>
-
-            <div class="vs-container">
-                <div class="player-choice" id="player-choice">?</div>
-                <div class="vs-text">VS</div>
-                <div class="opponent-choice" id="computer-choice">?</div>
-            </div>
-
-            <div class="choices">
-                <div class="choice" data-action="play-sp" data-choice="rock">✊</div>
-                <div class="choice" data-action="play-sp" data-choice="paper">✋</div>
-                <div class="choice" data-action="play-sp" data-choice="scissors">✌️</div>
-            </div>
-
-            <div class="result" id="sp-result">Make your move!</div>
-
-            <div class="scores">
-                <div class="score">You: <span id="player-score">0</span></div>
-                <div class="score">Computer: <span id="computer-score">0</span></div>
-            </div>
-
-            <div class="game-history">
-                <h3>Game History</h3>
-                <div id="sp-history"></div>
-            </div>
+        <div class="actions">
+          <button class="action primary" data-action="mp-quick">
+            <span class="action-title">Quick Match</span>
+            <span class="action-sub">Find anyone waiting</span>
+          </button>
+          <button class="action" data-action="mp-create">
+            <span class="action-title">Challenge a Friend</span>
+            <span class="action-sub">Create a code to share</span>
+          </button>
+          <button class="action" data-action="mp-show-join">
+            <span class="action-title">Join with Code</span>
+            <span class="action-sub">I have a code</span>
+          </button>
         </div>
 
-        <!-- Multiplayer Screen -->
-        <div id="multiplayer" class="game-screen">
-            <h2>Play With a Friend</h2>
-
-            <div class="instructions">
-                <p><strong>How to play:</strong></p>
-                <p>1. One player creates a game and shares the code/link</p>
-                <p>2. The other player joins with the code</p>
-                <p>3. Once both players are connected, the game begins!</p>
-            </div>
-
-            <div class="multiplayer-setup">
-                <div class="setup-options" id="setup-options">
-                    <button data-action="create-game">Create Game</button>
-                    <button data-action="show-join">Join Game</button>
-                </div>
-
-                <div class="join-section" id="join-section">
-                    <input type="text" id="game-code" placeholder="Enter game code">
-                    <button data-action="join-game">Connect</button>
-                </div>
-            </div>
-
-            <div id="multiplayer-game" style="display: none;">
-                <div class="game-code-display" id="game-code-display" style="display: none;">
-                    Game Code: <span id="code-display"></span>
-                </div>
-
-                <div class="share-section" id="share-section">
-                    <p>Share this code with your friend:</p>
-                    <input type="text" id="game-link" readonly>
-                    <div class="share-options">
-                        <button class="share-btn" data-action="copy-link"><i class="fas fa-copy"></i> Copy</button>
-                        <button class="share-btn" data-action="share-whatsapp"><i class="fab fa-whatsapp"></i> WhatsApp</button>
-                    </div>
-                </div>
-
-                <div class="status-message waiting" id="mp-status">
-                    <i class="fas fa-clock"></i> Waiting for friend to connect...
-                </div>
-
-                <div class="vs-container">
-                    <div class="player-choice" id="mp-player-choice">?</div>
-                    <div class="vs-text">VS</div>
-                    <div class="opponent-choice" id="mp-opponent-choice">?</div>
-                </div>
-
-                <div class="choices" id="mp-choices" style="display: none;">
-                    <div class="choice" data-action="play-mp" data-choice="rock">✊</div>
-                    <div class="choice" data-action="play-mp" data-choice="paper">✋</div>
-                    <div class="choice" data-action="play-mp" data-choice="scissors">✌️</div>
-                </div>
-
-                <div class="result" id="mp-result">Share the code with a friend to start playing</div>
-
-                <div class="scores">
-                    <div class="score">You: <span id="player1-score">0</span></div>
-                    <div class="score">Friend: <span id="player2-score">0</span></div>
-                </div>
-
-                <div class="game-history">
-                    <h3>Game History</h3>
-                    <div id="mp-history"></div>
-                </div>
-
-                <button data-action="leave-mp" style="background: linear-gradient(135deg, #e74c3c, #c0392b); margin-top: 20px;">
-                    <i class="fas fa-sign-out-alt"></i> Leave Game
-                </button>
-            </div>
+        <div class="join-row" id="mp-join-row" hidden>
+          <input id="mp-code" inputmode="latin" autocomplete="off" autocapitalize="characters" maxlength="6" placeholder="CODE" aria-label="Match code" />
+          <button class="mini-btn" data-action="mp-join">Join</button>
         </div>
+      </div>
+    </section>
 
-        <div class="footer">
-            <p>Rock Paper Scissors | <a href="https://karojunior.netlify.app">Karo Junior</a></p>
-        </div>
-    </div>
+    <!-- ============ MULTIPLAYER — MATCH ============ -->
+    <section id="screen-match" class="screen" data-screen="match">
+      <header class="bar">
+        <button class="back" data-action="mp-leave" aria-label="Leave">←</button>
+        <h2 id="mt-title">Match</h2>
+        <span class="hint" id="mt-code"></span>
+      </header>
 
-    <script src="app.js"></script>
+      <div class="status-strip" id="mt-status">Connecting…</div>
+
+      <div class="arena">
+        <div class="slot" id="mt-p1">?</div>
+        <div class="vs">VS</div>
+        <div class="slot" id="mt-p2">?</div>
+      </div>
+
+      <div class="timer" id="mt-timer" hidden>
+        <div class="timer-track"><div class="timer-fill" id="mt-timer-fill"></div></div>
+        <span id="mt-timer-text">20s</span>
+      </div>
+
+      <div class="verdict" id="mt-verdict">Waiting…</div>
+
+      <div class="moves" id="mt-moves" hidden>
+        <button class="move" data-action="mp-play" data-choice="rock" aria-label="Rock">✊</button>
+        <button class="move" data-action="mp-play" data-choice="paper" aria-label="Paper">✋</button>
+        <button class="move" data-action="mp-play" data-choice="scissors" aria-label="Scissors">✌️</button>
+      </div>
+
+      <div class="tape" id="mt-tape"></div>
+
+      <div class="actions actions-stacked" id="mt-after" hidden>
+        <button class="action primary" data-action="mp-again" id="mt-again">Play Again</button>
+        <button class="action" data-action="goto" data-screen="mp">Back to Lobby</button>
+      </div>
+    </section>
+
+  </div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>

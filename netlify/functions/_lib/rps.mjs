@@ -47,3 +47,25 @@ export function generatePlayerId() {
 export function normalizeCode(code) {
   return typeof code === 'string' ? code.trim().toUpperCase() : '';
 }
+
+/**
+ * Map a determineWinner() outcome ('a'|'b'|'tie') to a Vatar winner value.
+ * @param {'a'|'b'|'tie'} outcome
+ * @param {string} playerA
+ * @param {string} playerB
+ * @returns {string} playerId or 'draw'
+ */
+export function outcomeToVatarWinner(outcome, playerA, playerB) {
+  if (outcome === 'tie') return 'draw';
+  return outcome === 'a' ? playerA : playerB;
+}
+
+/**
+ * Normalise a Vatar player object that may use `id` (SDK) or `playerId` (API).
+ */
+export function normaliseVatarPlayer(p) {
+  if (!p || typeof p !== 'object') return null;
+  const id = p.playerId || p.id;
+  if (typeof id !== 'string' || !id) return null;
+  return { id, name: typeof p.name === 'string' ? p.name : null };
+}

@@ -1,5 +1,4 @@
 // Server-only Firebase Admin initialisation.
-// The service account key lives in environment variables, never in the repo.
 import admin from 'firebase-admin';
 
 let db = null;
@@ -15,7 +14,6 @@ export function getDb() {
     throw new Error('Firebase env vars are missing (FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY).');
   }
 
-  // Netlify stores the private key with literal \n sequences; convert to real newlines.
   const privateKey = privateKeyRaw.replace(/\\n/g, '\n');
 
   if (!admin.apps.length) {

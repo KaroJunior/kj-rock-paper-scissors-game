@@ -1,455 +1,359 @@
-// Frontend only. No Firebase SDK, no secrets.
-// Talks to /api/* (Netlify Functions) for multiplayer.
-// Single-player runs entirely in the browser.
+// Frontend for Karo Junior RPS.
+// Single-player runs locally. Multiplayer talks to our backend at /api/*;
+// the backend talks to Vatar. The browser never sees Vatar secrets.
+
+import { initVatar, getSession, vatar, matchApi } from './vatar-bridge.js';
 
 // ---------- state ----------
-const state = {
-  mode: 'single-player',
-  playerScore: 0,
-  computerScore: 0,
-  // multiplayer:
-  code: null,
-  token: null,
-  playerId: null,
+const S = {
+  screen: 'menu',
+  // single player
+  spYou: 0, spCpu: 0,
+  // backend session
+  token: null, playerId: null,
+  // active match
+  current: null,       // vatar match object (id, code, status, players, me)
+  local: null,         // backend filtered view
   pollTimer: null,
-  lastRoundNumber: 1,
+  countdownTimer: null,
+  lastRound: 0,
+  stake: 0,            // 0 = friendly
+  busy: false,
 };
 
-// ---------- screen switching ----------
-const modeButtons = document.querySelectorAll('.mode-btn');
-const gameScreens = document.querySelectorAll('.game-screen');
+// ---------- dom helpers ----------
+const $ = (id) => document.getElementById(id);
+const setText = (id, t) => { const el = $(id); if (el) el.textContent = t; };
+const show = (id, on) => { const el = $(id); if (el) el.hidden = !on; };
 
-function showScreen(screenId) {
-  modeButtons.forEach(btn => btn.classList.remove('active'));
-  const btn = Array.from(modeButtons).find(b => b.getAttribute('onclick')?.includes(screenId));
-  if (btn) btn.classList.add('active');
-  gameScreens.forEach(s => s.classList.remove('active-screen'));
-  document.getElementById(screenId).classList.add('active-screen');
-  state.mode = screenId;
+// ---------- emoji ----------
+const emoji = (c) => c === 'rock' ? '✊' : c === 'paper' ? '✋' : c === 'scissors' ? '✌️' : '?';
+
+// ---------- navigation ----------
+function goto(screen) {
+  S.screen = screen;
+  document.querySelectorAll('.screen').forEach((el) => {
+    el.classList.toggle('is-active', el.dataset.screen === screen);
+  });
+  if (screen === 'mp') refreshMpAvailability();
 }
 
-function showJoinSection(show) {
-  document.getElementById('join-section').style.display = show ? 'flex' : 'none';
-}
-
-// ---------- single player (unchanged) ----------
-function getEmoji(choice) {
-  switch (choice) {
-    case 'rock': return '✊';
-    case 'paper': return '✋';
-    case 'scissors': return '✌️';
-    default: return '?';
-  }
-}
-
-function addToHistory(text, isMultiplayer = false) {
-  const historyElement = isMultiplayer
-    ? document.getElementById('mp-history')
-    : document.getElementById('sp-history');
-  if (!historyElement) return;
-  const item = document.createElement('div');
-  item.className = 'history-item';
-  const parts = text.split(' - ');
-  if (parts[1] === 'You win!') {
-    item.innerHTML = `${parts[0]} - <span class="winner">${parts[1]}</span>`;
-  } else if (parts[1] === 'You lose!') {
-    item.innerHTML = `${parts[0]} - <span class="loser">${parts[1]}</span>`;
-  } else {
-    item.innerHTML = text;
-  }
-  historyElement.prepend(item);
-  while (historyElement.children.length > 5) {
-    historyElement.removeChild(historyElement.lastChild);
-  }
-}
-
-function playGame(playerChoice) {
-  const choices = ['rock', 'paper', 'scissors'];
-  const computerChoice = choices[Math.floor(Math.random() * 3)];
-  const playerChoiceElement = document.getElementById('player-choice');
-  playerChoiceElement.classList.add('shake');
-
+// ---------- single player ----------
+function playSP(choice) {
+  const CPU = ['rock','paper','scissors'];
+  const cpu = CPU[Math.floor(Math.random()*3)];
+  const p1 = $('sp-p1');
+  p1.classList.add('shake');
   setTimeout(() => {
-    playerChoiceElement.textContent = getEmoji(playerChoice);
-    playerChoiceElement.classList.remove('shake');
-    const computerChoiceElement = document.getElementById('computer-choice');
-    computerChoiceElement.textContent = getEmoji(computerChoice);
-    computerChoiceElement.classList.add('reveal');
-    setTimeout(() => computerChoiceElement.classList.remove('reveal'), 500);
+    p1.classList.remove('shake');
+    p1.classList.add('pop');
+    setText('sp-p1', emoji(choice));
+    setText('sp-p2', emoji(cpu));
+    setTimeout(() => p1.classList.remove('pop'), 350);
 
-    let result;
-    if (playerChoice === computerChoice) {
-      result = "It's a tie!";
-    } else if (
-      (playerChoice === 'rock' && computerChoice === 'scissors') ||
-      (playerChoice === 'paper' && computerChoice === 'rock') ||
-      (playerChoice === 'scissors' && computerChoice === 'paper')
-    ) {
-      result = 'You win!';
-      state.playerScore++;
-    } else {
-      result = 'Computer wins!';
-      state.computerScore++;
-    }
+    let text, cls;
+    if (choice === cpu) { text = "Tie."; cls = 'res-t'; }
+    else if (
+      (choice === 'rock' && cpu === 'scissors') ||
+      (choice === 'paper'  && cpu === 'rock') ||
+      (choice === 'scissors' && cpu === 'paper')
+    ) { text = 'You win!'; S.spYou++; cls = 'res-w'; }
+    else { text = 'CPU wins.'; S.spCpu++; cls = 'res-l'; }
 
-    document.getElementById('player-score').textContent = state.playerScore;
-    document.getElementById('computer-score').textContent = state.computerScore;
-    document.getElementById('sp-result').textContent = result;
-    addToHistory(`You: ${getEmoji(playerChoice)} vs Computer: ${getEmoji(computerChoice)} - ${result}`);
-  }, 500);
+    setText('sp-you', String(S.spYou));
+    setText('sp-cpu', String(S.spCpu));
+    setText('sp-verdict', text);
+    addTape('sp-tape', `You ${emoji(choice)} · CPU ${emoji(cpu)}`, text, cls);
+  }, 320);
 }
 
-// ---------- multiplayer: API helpers ----------
-async function api(path, options = {}) {
-  const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
-  if (state.token && options.auth !== false) {
-    headers.authorization = `Bearer ${state.token}`;
-  }
-  const res = await fetch(path, { ...options, headers });
+function addTape(id, text, result, cls) {
+  const tape = $(id);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const left = document.createElement('span'); left.textContent = text;
+  const right = document.createElement('span'); right.className = cls || ''; right.textContent = result;
+  row.append(left, right);
+  tape.prepend(row);
+  while (tape.children.length > 5) tape.removeChild(tape.lastChild);
+}
+
+// ---------- backend api ----------
+async function api(path, { method = 'GET', body, auth = true } = {}) {
+  const headers = { 'content-type': 'application/json' };
+  if (auth && S.token) headers.authorization = `Bearer ${S.token}`;
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* ignore */ }
-  if (!res.ok) {
-    const msg = (data && data.error) || `HTTP ${res.status}`;
-    throw Object.assign(new Error(msg), { status: res.status, data });
-  }
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch { /* keep */ }
+  if (!res.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${res.status}`), { status: res.status, data });
   return data;
 }
 
-function persistSession() {
-  if (state.code && state.token && state.playerId) {
-    localStorage.setItem('rps_session', JSON.stringify({
-      code: state.code, token: state.token, playerId: state.playerId,
-    }));
-  } else {
-    localStorage.removeItem('rps_session');
+async function ensureBackendSession() {
+  if (S.token) return;
+  const session = await getSession();
+  const r = await api('/api/session/exchange', { method: 'POST', body: { session }, auth: false });
+  S.token = r.token;
+  S.playerId = r.playerId;
+  setText('whoami', (r.name || 'Player') + ' · ' + r.mode);
+}
+
+// ---------- multiplayer availability ----------
+function refreshMpAvailability() {
+  show('mp-offline', !vatar.ready);
+  show('mp-lobby', vatar.ready);
+  const badge = $('env-badge');
+  if (vatar.ready) { badge.dataset.mode = vatar.mode || 'test'; badge.textContent = (vatar.mode || 'test').toUpperCase(); }
+  else { badge.textContent = 'STANDALONE'; }
+  setText('mp-mode-hint', S.stake > 0 ? `Staked · ${S.stake}` : 'Friendly');
+}
+
+// ---------- Vatar callbacks ----------
+async function onVatarMatch(m) {
+  S.current = m;
+  if (!m) return;
+
+  if (m.status === 'open') {
+    goto('match');
+    setText('mt-title', 'Waiting');
+    setText('mt-code', m.code || '');
+    setStatus('warn', 'Waiting for opponent to join');
+    setText('mt-verdict', 'Share the code: ' + (m.code || '—'));
+    show('mt-moves', false);
+    return;
+  }
+  if (m.status === 'playing') {
+    setStatus('ok', 'Match started');
+    setText('mt-verdict', 'Fetching match…');
+    try { await registerMatch(m.id); } catch (e) { setStatus('err', "Couldn't start: " + e.message); }
+    return;
+  }
+  if (m.status === 'done') {
+    stopPolling(); stopTimer();
+    setStatus('ok', 'Match complete');
+    const won = m.winner && vatar.player && m.winner === vatar.player.id;
+    setText('mt-verdict', m.winner ? (won ? 'You win!' : 'You lose.') : 'Settled.');
+    show('mt-moves', false);
+    show('mt-after', true);
+    return;
+  }
+  if (m.status === 'cancelled' || m.status === 'void') {
+    stopPolling(); stopTimer();
+    setStatus('warn', 'Match ' + m.status);
+    show('mt-moves', false);
+    show('mt-after', true);
   }
 }
 
-function restoreSession() {
-  try {
-    const raw = localStorage.getItem('rps_session');
-    if (!raw) return null;
-    const s = JSON.parse(raw);
-    if (s && s.code && s.token && s.playerId) return s;
-  } catch { /* ignore */ }
-  return null;
+async function registerMatch(vatarMatchId) {
+  await ensureBackendSession();
+  const view = await api('/api/match/register', { method: 'POST', body: { vatarMatchId } });
+  S.local = view;
+  S.lastRound = view.round || 0;
+  goto('match');
+  setText('mt-title', 'Match');
+  setText('mt-code', view.code || '');
+  show('mt-moves', true);
+  show('mt-after', false);
+  setStatus('ok', view.opponent ? 'Both players connected' : 'Waiting…');
+  startPolling(vatarMatchId);
 }
 
-// ---------- multiplayer: flow ----------
-async function createGame() {
-  document.getElementById('setup-options').style.display = 'none';
-  document.getElementById('join-section').style.display = 'none';
-  document.getElementById('multiplayer-game').style.display = 'block';
-  document.getElementById('mp-choices').style.display = 'none';
-  document.getElementById('share-section').style.display = 'block';
-  document.getElementById('game-code-display').style.display = 'block';
-  document.getElementById('mp-history').innerHTML = '';
-  document.getElementById('mp-status').className = 'status-message waiting';
-  document.getElementById('mp-status').innerHTML = '<i class="fas fa-clock"></i> Creating match…';
-
-  try {
-    const data = await api('/api/match/create', { method: 'POST', body: '{}', auth: false });
-    state.code = data.code;
-    state.token = data.token;
-    state.playerId = data.playerId;
-    persistSession();
-
-    const url = `${window.location.origin}${window.location.pathname}?game=${state.code}`;
-    document.getElementById('code-display').textContent = state.code;
-    document.getElementById('game-link').value = url;
-    document.getElementById('mp-status').innerHTML = '<i class="fas fa-clock"></i> Waiting for friend to connect…';
-    document.getElementById('mp-status').className = 'status-message waiting';
-    document.getElementById('mp-result').textContent = 'Share the code with a friend to start playing';
-    document.getElementById('player1-score').textContent = '0';
-    document.getElementById('player2-score').textContent = '0';
-    document.getElementById('mp-player-choice').textContent = '?';
-    document.getElementById('mp-opponent-choice').textContent = '?';
-
-    startPolling();
-  } catch (err) {
-    document.getElementById('mp-status').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Could not create match';
-    document.getElementById('mp-result').textContent = String(err.message || err);
-  }
-}
-
-async function joinGame() {
-  const code = (document.getElementById('game-code').value || '').trim().toUpperCase();
-  if (!code) { alert('Please enter a game code'); return; }
-
-  document.getElementById('setup-options').style.display = 'none';
-  document.getElementById('multiplayer-game').style.display = 'block';
-  document.getElementById('share-section').style.display = 'none';
-  document.getElementById('game-code-display').style.display = 'none';
-  document.getElementById('mp-choices').style.display = 'none';
-  document.getElementById('mp-history').innerHTML = '';
-  document.getElementById('mp-status').className = 'status-message waiting';
-  document.getElementById('mp-status').innerHTML = '<i class="fas fa-clock"></i> Connecting…';
-
-  try {
-    const data = await api('/api/match/join', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-      auth: false,
-    });
-    state.code = data.code;
-    state.token = data.token;
-    state.playerId = data.playerId;
-    persistSession();
-
-    document.getElementById('mp-player-choice').textContent = '?';
-    document.getElementById('mp-opponent-choice').textContent = '?';
-    startPolling();
-  } catch (err) {
-    document.getElementById('mp-status').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Join failed';
-    const result = document.getElementById('mp-result');
-    result.textContent = humanJoinError(err);
-  }
-}
-
-function humanJoinError(err) {
-  switch (err.message) {
-    case 'match not found': return 'No match with that code. Check with your friend.';
-    case 'match is full': return 'That match already has two players.';
-    case 'match has ended': return 'That match has already ended.';
-    default: return String(err.message || 'Could not join');
-  }
-}
-
-async function playMultiplayer(choice) {
-  if (!state.code) return;
-  const buttons = document.querySelectorAll('#mp-choices .choice');
-  buttons.forEach(b => b.classList.add('disabled'));
-  document.getElementById('mp-result').textContent = 'Submitting…';
-  try {
-    await api(`/api/match/${state.code}/choice`, {
-      method: 'POST',
-      body: JSON.stringify({ choice }),
-    });
-    // Poll will pick up the rest.
-  } catch (err) {
-    document.getElementById('mp-result').textContent = `Error: ${err.message}`;
-    buttons.forEach(b => b.classList.remove('disabled'));
-  }
-}
-
-async function leaveMultiplayerGame() {
+// ---------- polling ----------
+function startPolling(matchId) {
   stopPolling();
+  S.pollTimer = setInterval(() => pollOnce(matchId), 1500);
+  pollOnce(matchId);
+}
+function stopPolling() { if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; } }
+
+async function pollOnce(matchId) {
   try {
-    if (state.code && state.token) {
-      await api(`/api/match/${state.code}/leave`, { method: 'POST', body: '{}' });
-    }
-  } catch { /* best effort */ }
-  state.code = null;
-  state.token = null;
-  state.playerId = null;
-  persistSession();
-  window.location.href = window.location.pathname;
-}
-
-// ---------- multiplayer: polling ----------
-function startPolling() {
-  stopPolling();
-  state.pollTimer = setInterval(pollOnce, 1500);
-  pollOnce();
-}
-
-function stopPolling() {
-  if (state.pollTimer) {
-    clearInterval(state.pollTimer);
-    state.pollTimer = null;
+    const view = await api(`/api/match/${encodeURIComponent(matchId)}`);
+    renderMatch(view);
+  } catch (e) {
+    if (e.status === 401) S.token = null;
+    if (e.status === 404) { stopPolling(); setStatus('err', 'Match unavailable'); }
   }
 }
 
-async function pollOnce() {
-  if (!state.code || !state.token) return;
+function renderMatch(v) {
+  S.local = v;
+  const moves = document.querySelectorAll('#mt-moves .move');
+  const complete = v.status === 'resolved';
+
+  setText('mt-p1', emoji(v.yourChoice));
+  if (complete) setText('mt-p2', emoji(v.opponentChoice));
+
+  moves.forEach((btn) => {
+    btn.disabled = complete || v.youSubmitted;
+    btn.classList.toggle('is-picked', btn.dataset.choice === v.yourChoice);
+  });
+
+  if (complete) {
+    stopTimer();
+    setStatus('ok', 'Round complete');
+    let text = "It's a draw.";
+    if (v.winner === 'you') text = 'You win!';
+    else if (v.winner === 'opponent') text = 'You lose.';
+    setText('mt-verdict', text);
+    show('mt-moves', false);
+    show('mt-after', true);
+    addTape('mt-tape', `${emoji(v.yourChoice)} vs ${emoji(v.opponentChoice)}`, text,
+      v.winner === 'you' ? 'res-w' : v.winner === 'opponent' ? 'res-l' : 'res-t');
+    return;
+  }
+
+  if (v.youSubmitted && v.opponentSubmitted) setText('mt-verdict', 'Revealing…');
+  else if (v.youSubmitted) { setText('mt-verdict', "Waiting for opponent…"); setText('mt-p2', '…'); }
+  else if (v.opponentSubmitted) { setText('mt-verdict', 'Opponent moved. Your turn.'); setText('mt-p2', '…'); }
+  else setText('mt-verdict', 'Make your move.');
+
+  renderTimer(v.deadline);
+}
+
+function setStatus(kind, text) {
+  const el = $('mt-status');
+  el.dataset.kind = kind;
+  el.textContent = text;
+}
+
+// ---------- timer ----------
+function renderTimer(deadline) {
+  if (!deadline) { show('mt-timer', false); return; }
+  show('mt-timer', true);
+  stopTimer();
+  const total = 20000; // must match server TURN_MS
+  const tick = () => {
+    const left = Math.max(0, deadline - Date.now());
+    const pct = Math.max(0, Math.min(1, left / total));
+    $('mt-timer-fill').style.width = (pct * 100).toFixed(1) + '%';
+    setText('mt-timer-text', Math.ceil(left / 1000) + 's');
+    $('mt-timer').classList.toggle('is-low', left < 5000);
+    if (left <= 0) stopTimer();
+  };
+  tick();
+  S.countdownTimer = setInterval(tick, 200);
+}
+function stopTimer() { if (S.countdownTimer) { clearInterval(S.countdownTimer); S.countdownTimer = null; } show('mt-timer', false); }
+
+// ---------- multiplayer actions ----------
+async function mpSetStake(value) {
+  // Staked mode disabled until platform approval. Only 0 is honored.
+  S.stake = value === 'staked' ? 0 : Number(value) || 0;
+  document.querySelectorAll('[data-action="mp-set-stake"]').forEach((b) => {
+    const on = String(S.stake) === b.dataset.stake || (S.stake === 0 && b.dataset.stake === '0');
+    b.classList.toggle('is-on', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
+  refreshMpAvailability();
+}
+
+async function mpQuick() {
+  if (S.busy) return;
+  S.busy = true;
   try {
-    const data = await api(`/api/match/${state.code}`, { method: 'GET' });
-    renderMatch(data);
-  } catch (err) {
-    if (err.status === 401 || err.status === 404) {
-      stopPolling();
-      document.getElementById('mp-status').innerHTML = '<i class="fas fa-exclamation-circle"></i> Match unavailable';
-      document.getElementById('mp-result').textContent = 'The match could not be found.';
+    await ensureBackendSession();
+    // Docs: Vatar.match.quick({ stake }) — pairs with another player waiting at the same stake.
+    await matchApi().quick({ stake: S.stake });
+  } catch (e) {
+    setStatus('err', `Quick match failed: ${e.code || e.message}`);
+  } finally { S.busy = false; }
+}
+
+async function mpCreate() {
+  if (S.busy) return;
+  S.busy = true;
+  try {
+    await ensureBackendSession();
+    await matchApi().create({ stake: S.stake, seats: 2 });
+  } catch (e) {
+    setStatus('err', `Create failed: ${e.code || e.message}`);
+  } finally { S.busy = false; }
+}
+
+async function mpJoin() {
+  const code = ($('mp-code').value || '').trim().toUpperCase();
+  if (!code) return;
+  if (S.busy) return;
+  S.busy = true;
+  try {
+    await ensureBackendSession();
+    await matchApi().join(code);
+  } catch (e) {
+    setStatus('err', `Join failed: ${e.code || e.message}`);
+  } finally { S.busy = false; }
+}
+
+async function mpPlay(choice) {
+  if (!S.local) return;
+  document.querySelectorAll('#mt-moves .move').forEach((b) => (b.disabled = true));
+  try {
+    const r = await api(`/api/match/${encodeURIComponent(S.local.matchId)}/choice`, {
+      method: 'POST', body: { choice },
+    });
+    if (r.resolved && r.vatar && !r.vatar.ok) {
+      setStatus('warn', 'Round decided, settlement pending');
     }
+  } catch (e) {
+    setStatus('err', 'Error: ' + e.message);
+    document.querySelectorAll('#mt-moves .move').forEach((b) => (b.disabled = false));
   }
 }
 
-function renderMatch(m) {
-  const statusEl = document.getElementById('mp-status');
-  const resultEl = document.getElementById('mp-result');
-  const choicesEl = document.getElementById('mp-choices');
-
-  // Opponent presence
-  if (m.status === 'waiting') {
-    statusEl.className = 'status-message waiting';
-    statusEl.innerHTML = '<i class="fas fa-clock"></i> Waiting for friend to connect…';
-    resultEl.textContent = 'Share the code with a friend to start playing';
-    choicesEl.style.display = 'none';
-    document.getElementById('share-section').style.display = 'block';
-    return;
-  }
-
-  if (m.status === 'ended') {
-    stopPolling();
-    statusEl.className = 'status-message waiting';
-    statusEl.innerHTML = '<i class="fas fa-exclamation-circle"></i> Match ended';
-    resultEl.textContent = 'The other player left the game.';
-    choicesEl.style.display = 'none';
-    return;
-  }
-
-  // Active
-  statusEl.className = 'status-message connected';
-  statusEl.innerHTML = '<i class="fas fa-check-circle"></i> Connected';
-  document.getElementById('share-section').style.display = 'none';
-  document.getElementById('game-code-display').style.display = 'block';
-  choicesEl.style.display = 'flex';
-
-  // Scores
-  document.getElementById('player1-score').textContent = String(m.you.score ?? 0);
-  document.getElementById('player2-score').textContent = String(m.opponent?.score ?? 0);
-
-  const round = m.round;
-  if (!round) return;
-
-  // Reset reveal animation on new round
-  if (round.number !== state.lastRoundNumber) {
-    state.lastRoundNumber = round.number;
-    document.getElementById('mp-player-choice').textContent = '?';
-    document.getElementById('mp-opponent-choice').textContent = '?';
-  }
-
-  const buttons = document.querySelectorAll('#mp-choices .choice');
-  const disable = round.status === 'complete' || round.youSubmitted;
-
-  buttons.forEach(b => b.classList.toggle('disabled', disable));
-
-  // Player's own choice
-  if (round.yourChoice) {
-    document.getElementById('mp-player-choice').textContent = getEmoji(round.yourChoice);
-  }
-
-  if (round.status === 'complete') {
-    // Reveal opponent choice with a short delay
-    document.getElementById('mp-opponent-choice').textContent = getEmoji(round.opponentChoice);
-    const revealEl = document.getElementById('mp-opponent-choice');
-    revealEl.classList.add('reveal');
-    setTimeout(() => revealEl.classList.remove('reveal'), 500);
-
-    if (round.result === 'win') resultEl.textContent = 'You win!';
-    else if (round.result === 'lose') resultEl.textContent = 'You lose!';
-    else resultEl.textContent = "It's a tie!";
-
-    // History line
-    // (A more complete history is in m.history; we re-render from that below.)
-  } else if (round.youSubmitted && round.opponentSubmitted) {
-    resultEl.textContent = 'Revealing…';
-  } else if (round.youSubmitted) {
-    resultEl.textContent = "Waiting for friend's move…";
-    document.getElementById('mp-opponent-choice').textContent = '...';
-  } else if (round.opponentSubmitted) {
-    resultEl.textContent = 'Your friend has made a choice! Your turn.';
-    document.getElementById('mp-opponent-choice').textContent = '...';
-  } else {
-    resultEl.textContent = 'Make your move!';
-    document.getElementById('mp-opponent-choice').textContent = '?';
-  }
-
-  renderHistory(m.history);
+async function mpLeave() {
+  stopPolling(); stopTimer();
+  try { await matchApi().leave(); } catch { /* best effort */ }
+  S.current = null; S.local = null;
+  goto('mp');
 }
 
-let lastHistoryLength = -1;
-function renderHistory(history) {
-  if (!Array.isArray(history)) return;
-  if (history.length === lastHistoryLength) return;
-  lastHistoryLength = history.length;
-
-  const historyEl = document.getElementById('mp-history');
-  historyEl.innerHTML = '';
-  // Newest first, max 5
-  for (const entry of history.slice().reverse().slice(0, 5)) {
-    const item = document.createElement('div');
-    item.className = 'history-item';
-    const you = getEmoji(entry.yourChoice);
-    const opp = getEmoji(entry.opponentChoice);
-    let resultText;
-    if (entry.result === 'win') resultText = '<span class="winner">You win!</span>';
-    else if (entry.result === 'lose') resultText = '<span class="loser">You lose!</span>';
-    else resultText = "It's a tie!";
-    item.innerHTML = `You: ${you} vs Friend: ${opp} - ${resultText}`;
-    historyEl.appendChild(item);
-  }
+async function mpAgain() {
+  // Leave the finished match and return to lobby.
+  try { await matchApi().leave(); } catch { /* ignore */ }
+  S.current = null; S.local = null;
+  goto('mp');
 }
 
-// ---------- sharing ----------
-function copyLink() {
-  const input = document.getElementById('game-link');
-  input.select();
-  document.execCommand('copy');
-  alert('Game link copied to clipboard!');
-}
-
-function shareViaWhatsApp() {
-  const url = document.getElementById('game-link').value;
-  const text = `Join me for a game of Rock Paper Scissors! ${url}`;
-  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-}
-
-// ---------- init ----------
-async function init() {
-  // If we have a stored session, restore it and reconnect to the match.
-  const stored = restoreSession();
-  const urlParams = new URLSearchParams(window.location.search);
-  const urlCode = (urlParams.get('game') || '').toUpperCase();
-
-  if (stored && stored.code && (!urlCode || urlCode === stored.code)) {
-    state.code = stored.code;
-    state.token = stored.token;
-    state.playerId = stored.playerId;
-    document.getElementById('multiplayer-game').style.display = 'block';
-    document.getElementById('setup-options').style.display = 'none';
-    showScreen('multiplayer');
-    startPolling();
-    return;
-  }
-
-  if (urlCode) {
-    document.getElementById('game-code').value = urlCode;
-    showScreen('multiplayer');
-    setTimeout(joinGame, 400);
-  }
-}
-
-window.addEventListener('DOMContentLoaded', init);
-window.addEventListener('beforeunload', () => {
-  // Best-effort notify server we're leaving; not required for correctness.
-  if (state.code && state.token) {
-    navigator.sendBeacon?.(
-      `/api/match/${state.code}/leave`,
-      new Blob([JSON.stringify({})], { type: 'application/json' })
-    );
-  }
-});
-
-// ---------- delegated click handling (replaces inline onclick) ----------
+// ---------- delegated clicks ----------
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
+  const a = el.dataset.action;
+  switch (a) {
+    case 'goto':      return goto(el.dataset.screen);
+    case 'sp-play':   return playSP(el.dataset.choice);
+    case 'mp-set-stake': return mpSetStake(el.dataset.stake);
+    case 'mp-quick':  return mpQuick();
+    case 'mp-create': return mpCreate();
+    case 'mp-show-join': show('mp-join-row', true); return;
+    case 'mp-join':   return mpJoin();
+    case 'mp-play':   return mpPlay(el.dataset.choice);
+    case 'mp-leave':  return mpLeave();
+    case 'mp-again':  return mpAgain();
+  }
+});
 
-  const action = el.dataset.action;
-  const choice = el.dataset.choice;
-  const screen = el.dataset.screen;
+// Enter in code field triggers join
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id === 'mp-code') mpJoin();
+});
 
-  switch (action) {
-    case 'show-screen':     return showScreen(screen);
-    case 'play-sp':         return playGame(choice);
-    case 'create-game':     return createGame();
-    case 'show-join':       return showJoinSection(true);
-    case 'join-game':       return joinGame();
-    case 'play-mp':         return playMultiplayer(choice);
-    case 'copy-link':       return copyLink();
-    case 'share-whatsapp':  return shareViaWhatsApp();
-    case 'leave-mp':        return leaveMultiplayerGame();
+// ---------- boot ----------
+window.addEventListener('DOMContentLoaded', async () => {
+  goto('menu');
+  await initVatar({
+    onMatch: onVatarMatch,
+    onPause: () => stopTimer(),
+    onResume: () => { if (S.current && S.current.id) startPolling(S.current.id); },
+  });
+
+  // Reconnection: if a match is already in progress for this player, resume it.
+  if (vatar.ready && vatar.player) {
+    setText('whoami', vatar.player.name || 'Player');
+    try {
+      const m = await matchApi().current();
+      if (m && m.id) { S.current = m; onVatarMatch(m); }
+    } catch { /* ignore */ }
   }
 });
