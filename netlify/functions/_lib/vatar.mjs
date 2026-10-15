@@ -56,13 +56,21 @@ export async function postMatchResult(matchId, nonce, winner, { maxAttempts = 3 
     let data = null; try { data = text ? JSON.parse(text) : null; } catch { /* keep */ }
     last = { ok: res.ok, http: res.status, data, text, attempts: attempt };
 
-    // 401: bad signature or stale timestamp — retrying with a new timestamp CAN help
-    // for stale, but not for bad signature. We try once more on 401, then give up.
     if (res.ok) return last;
     if (res.status >= 400 && res.status < 500 && res.status !== 401) return last;
     if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, 250 * 2 ** (attempt - 1)));
   }
   return last;
+}
+
+/** GET /purchases/{id} — one purchase in this game. */
+export async function getPurchase(purchaseId) {
+  return call('GET', `/purchases/${encodeURIComponent(purchaseId)}`);
+}
+
+/** POST /purchases/{id}/deliver — safe to repeat. */
+export async function deliverPurchase(purchaseId) {
+  return call('POST', `/purchases/${encodeURIComponent(purchaseId)}/deliver`);
 }
 
 /** Constant-time verification of a webhook signature: "sha256=" + hex HMAC of raw body. */

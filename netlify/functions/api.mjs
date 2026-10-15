@@ -3,6 +3,8 @@
 //   POST /api/match/register         { vatarMatchId }    -> filtered match view
 //   POST /api/match/:id/choice       { choice }          -> { ok, resolved, vatar }
 //   GET  /api/match/:id                                  -> filtered match view
+//   POST /api/purchase/claim         { purchaseId }      -> { ok, granted, ... }
+//   GET  /api/purchase/entitlements                      -> { entitlements }
 import { issueToken, requirePlayer } from './_lib/auth.mjs';
 import { isValidChoice, determineWinner, normaliseVatarPlayer } from './_lib/rps.mjs';
 import * as Vatar from './_lib/vatar.mjs';
@@ -10,6 +12,7 @@ import {
   ensureMatch, getMatch as getLocalMatch,
   submitChoice, tryResolve, recordVatarResult,
 } from './_lib/matches.mjs';
+import { grantEntitlementOnce, getEntitlements } from './_lib/purchases.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
@@ -119,7 +122,6 @@ async function getState(_req, claims, matchId) {
   if (!local) return nf('match not found');
   if (!local.players.some((p) => p.id === claims.playerId)) return unauth();
 
-  // Server-enforced deadline: if the round is past due, resolve it now.
   if (local.status === 'active' && Date.now() > local.deadline) {
     const outcome = await tryResolve(matchId, determineWinner);
     if (outcome.resolved) {
@@ -130,6 +132,52 @@ async function getState(_req, claims, matchId) {
   }
 
   return json(filteredView(local, claims.playerId));
+}
+
+// ---------- purchases ----------
+
+async function claimPurchase(req, claims) {
+  const b = await readBody(req);
+  if (typeof b?.purchaseId !== 'string' || !b.purchaseId) return err('missing purchaseId');
+  if (b.purchaseId.length > 128) return err('bad purchaseId');
+
+  // 1. Ask Vatar. Client claims are never trusted.
+  const r = await Vatar.getPurchase(b.purchaseId);
+  if (!r.ok) {
+    if (r.http === 404) return nf('purchase not found');
+    return json({ error: 'vatar_error', http: r.http }, 502);
+  }
+  const p = r.data || {};
+
+  // 2. Must belong to this player.
+  if (p.playerId !== claims.playerId) return err('not your purchase', 403);
+
+  // 3. Status gate.
+  if (p.status === 'refunded') return err('refunded', 409);
+  if (p.status !== 'paid' && p.status !== 'delivered') return err('not paid', 409);
+
+  // 4. Idempotent grant.
+  const { granted } = await grantEntitlementOnce(claims.playerId, p.productId, p.id);
+
+  // 5. Mark delivered (safe to repeat). A refunded purchase is 409 — treat as failure.
+  let delivered = { ok: true, http: 200 };
+  if (p.status !== 'delivered') {
+    delivered = await Vatar.deliverPurchase(p.id);
+  }
+
+  return json({
+    ok: true,
+    granted,
+    productId: p.productId,
+    vatarStatus: p.status,
+    delivered: delivered.ok,
+    deliveredHttp: delivered.http,
+  });
+}
+
+async function listEntitlements(_req, claims) {
+  const ents = await getEntitlements(claims.playerId);
+  return json({ entitlements: ents });
 }
 
 // ---------- router ----------
@@ -151,6 +199,16 @@ async function route(req) {
     if (parts.length === 3 && method === 'GET') return getState(req, claims, matchId);
     if (parts.length === 4 && parts[3] === 'choice' && method === 'POST') return doChoice(req, claims, matchId);
   }
+
+  if (parts[1] === 'purchase' && parts[2] === 'claim' && method === 'POST') {
+    const claims = requirePlayer(req); if (!claims) return unauth();
+    return claimPurchase(req, claims);
+  }
+  if (parts[1] === 'purchase' && parts[2] === 'entitlements' && method === 'GET') {
+    const claims = requirePlayer(req); if (!claims) return unauth();
+    return listEntitlements(req, claims);
+  }
+
   return nf();
 }
 

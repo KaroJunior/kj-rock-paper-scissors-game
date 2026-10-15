@@ -34,7 +34,6 @@ function checkCreds(user, pass) {
   return secureEq(user, U) && secureEq(pass, P);
 }
 async function form(url, req) {
-  const ct = req.headers.get('content-type') || '';
   const raw = await req.text();
   const params = new URLSearchParams(raw);
   const obj = {};
@@ -44,10 +43,10 @@ async function form(url, req) {
 
 // ---------- pages ----------
 const STYLE = `
-:root{--ink:#0a0a0a;--paper:#f5f2e8;--paper-2:#fffdf5;--accent:#ffe500;--win:#00b56a;--lose:#e5333c;
---rule:3px solid var(--ink);--shadow:6px 6px 0 var(--ink);--mono:"SF Mono",ui-monospace,Menlo,monospace;
---font:"Inter","Segoe UI",system-ui,sans-serif}
-@media (prefers-color-scheme:dark){:root{--ink:#f5f2e8;--paper:#111013;--paper-2:#1a191d;--shadow:6px 6px 0 var(--ink)}}
+:root{--ink:#0a0a0a;--paper:#f5f2e8;--paper-2:#fffdf5;--accent:#ffe500;--on-accent:#0a0a0a;
+--win:#00b56a;--lose:#e5333c;--rule:3px solid var(--ink);--shadow:6px 6px 0 var(--ink);
+--mono:"SF Mono",ui-monospace,Menlo,monospace;--font:"Inter","Segoe UI",system-ui,sans-serif}
+@media (prefers-color-scheme:dark){:root{--ink:#f5f2e8;--paper:#111013;--paper-2:#1a191d;--on-accent:#0a0a0a;--shadow:6px 6px 0 var(--ink)}}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{background:var(--paper);color:var(--ink);font-family:var(--font);font-weight:600;line-height:1.3;min-height:100dvh}
@@ -74,7 +73,7 @@ a{color:inherit}
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
 .field label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
 .field input{border:var(--rule);background:var(--paper);padding:12px;font-family:var(--mono);font-size:15px}
-.btn{display:block;width:100%;border:var(--rule);background:var(--accent);box-shadow:var(--shadow);padding:14px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;cursor:pointer}
+.btn{display:block;width:100%;border:var(--rule);background:var(--accent);color:var(--on-accent);box-shadow:var(--shadow);padding:14px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;cursor:pointer}
 .btn:active{transform:translate(3px,3px);box-shadow:3px 3px 0 var(--ink)}
 .err{border:var(--rule);background:var(--lose);color:var(--paper-2);padding:10px;font-family:var(--mono);font-size:12px;margin-bottom:12px}
 `;
@@ -137,8 +136,6 @@ function pageDashboard(stats) {
 // ---------- data ----------
 async function loadStats() {
   const db = getDb();
-  // Single fetch of matches. Cap for safety in case the collection grows large;
-  // callers only need recent + aggregate.
   const snap = await db.collection('vatar_matches').orderBy('startedAt', 'desc').limit(500).get();
 
   let total = 0, waiting = 0, active = 0, resolved = 0, friendly = 0, staked = 0, roundsCompleted = 0;
@@ -189,7 +186,6 @@ async function route(req) {
   const path = url.pathname;
   const method = req.method.toUpperCase();
 
-  // /admin/login  (GET: page, POST: submit)
   if (path === '/admin/login') {
     if (method === 'GET') {
       const csrf = newCsrfToken();
@@ -215,7 +211,6 @@ async function route(req) {
     return redirect('/admin/login', { 'set-cookie': clear });
   }
 
-  // /admin/stats.json — for programmatic use
   if (path === '/admin/stats.json' && method === 'GET') {
     if (!requireAdminFromCookie(req)) return new Response('unauthorized', { status: 401 });
     try {
@@ -227,7 +222,6 @@ async function route(req) {
     }
   }
 
-  // /admin → dashboard or login
   if ((path === '/admin' || path === '/admin/') && method === 'GET') {
     if (!requireAdminFromCookie(req)) return redirect('/admin/login');
     try {

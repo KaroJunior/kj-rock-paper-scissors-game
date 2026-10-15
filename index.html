@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="light dark" />
   <title>Rock Paper Scissors · Karo Junior</title>
+  <link rel="icon" href="/assets/logo.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/assets/logo.png" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://lagoslife.app/sdk/vatar-games-v1.js"></script>
 </head>
@@ -15,7 +17,10 @@
     <section id="screen-menu" class="screen" data-screen="menu">
       <header class="masthead">
         <div class="brand">
-          <div class="brand-mark">RPS</div>
+          <div class="brand-mark">
+            <!-- Save your square 512×512 PNG at /assets/logo.png (yellow fist, cyan palm, magenta scissors on dark) -->
+            <img src="/assets/logo.png" alt="Rock Paper Scissors icon" width="64" height="64" />
+          </div>
           <div class="brand-text">
             <h1>Rock<br/>Paper<br/>Scissors</h1>
             <p class="brand-by">by Karo Junior</p>
@@ -37,7 +42,11 @@
       </div>
 
       <footer class="stamp">
-        <span id="env-badge" class="env-badge">—</span>
+        <div class="stamp-left">
+          <span id="env-badge" class="env-badge">—</span>
+          <button class="audio-toggle" id="sfx-toggle" data-action="toggle-sfx" aria-pressed="true" title="Sound effects">SFX</button>
+          <button class="audio-toggle" id="music-toggle" data-action="toggle-music" aria-pressed="false" title="Music (off by default)">Music</button>
+        </div>
         <span id="whoami" class="whoami"></span>
       </footer>
     </section>
@@ -100,6 +109,23 @@
           </div>
         </div>
 
+        <!-- Pending Challenge panel: shown while a challenge is waiting. -->
+        <div id="mp-challenge-pending" class="panel" hidden>
+          <p class="eyebrow">Your challenge is waiting</p>
+          <p class="pending-note">Share this code with a friend in Lagos Life chat. Do not close the game from the running app's menu — you can return here and the code stays the same.</p>
+          <div class="code-display" id="mp-code-display">------</div>
+          <div class="timer" id="mp-challenge-timer">
+            <div class="timer-track"><div class="timer-fill" id="mp-challenge-timer-fill" style="width:100%"></div></div>
+            <span id="mp-challenge-timer-text">10:00</span>
+          </div>
+          <div class="actions actions-stacked" style="margin-top:12px">
+            <button class="action" data-action="mp-cancel-challenge">
+              <span class="action-title">Cancel Challenge</span>
+              <span class="action-sub">Release the code</span>
+            </button>
+          </div>
+        </div>
+
         <div class="actions">
           <button class="action primary" data-action="mp-quick">
             <span class="action-title">Quick Match</span>
@@ -115,9 +141,18 @@
           </button>
         </div>
 
-        <div class="join-row" id="mp-join-row" hidden>
+        <div class="join-row" id="mp-join-row" hidden style="margin-top:14px">
           <input id="mp-code" inputmode="latin" autocomplete="off" autocapitalize="characters" maxlength="6" placeholder="CODE" aria-label="Match code" />
           <button class="mini-btn" data-action="mp-join">Join</button>
+        </div>
+
+        <!-- Optional cosmetic purchase (game remains fully playable without it). -->
+        <div class="panel" id="mp-cosmetics" style="margin-top:14px">
+          <p class="eyebrow">Cosmetics</p>
+          <button class="action" data-action="buy-neon" id="buy-neon-btn">
+            <span class="action-title">Neon Arena Theme</span>
+            <span class="action-sub" id="neon-status">Unlock a cyan-and-magenta look.</span>
+          </button>
         </div>
       </div>
     </section>

@@ -1,8 +1,9 @@
 // Thin wrapper around the Vatar SDK.
 // Responsibilities: init once, cache a fresh session token, forward lifecycle & match
-// updates, expose a match() namespace. Never fakes success.
+// updates, expose match() and purchase helpers. Never fakes success.
 //
-// Design rule: the frontend is a THIN client. It does not decide winners.
+// Design rule: the frontend is a THIN client. It does not decide winners,
+// and it does not decide whether a purchase was paid.
 
 export const vatar = {
   ready: false,
@@ -21,8 +22,8 @@ function hasSdk() {
 }
 
 export async function initVatar({ onMatch, onPause, onResume } = {}) {
-  vatar._onMatch = onMatch || null;
-  vatar._onPause = onPause || null;
+  vatar._onMatch  = onMatch  || null;
+  vatar._onPause  = onPause  || null;
   vatar._onResume = onResume || null;
 
   if (!hasSdk()) { vatar.error = 'not_framed'; return vatar; }
@@ -61,4 +62,43 @@ export async function getSession() {
 export function matchApi() {
   if (!vatar.ready || !window.Vatar.match) throw new Error('matches_unavailable');
   return window.Vatar.match;
+}
+
+// ---------- Purchases ----------
+
+export function purchasesSupported() {
+  return !!(vatar.ready && window.Vatar
+    && typeof window.Vatar.purchase === 'function'
+    && typeof window.Vatar.purchases === 'function'
+    && typeof window.Vatar.onPurchase === 'function');
+}
+
+/** Ask Vatar to open the pay sheet. Resolves { purchaseId, productId } or throws. */
+export async function requestPurchase(productId) {
+  if (!purchasesSupported()) {
+    const e = new Error('purchases_unavailable');
+    e.code = 'not_available';
+    throw e;
+  }
+  return window.Vatar.purchase(productId);
+}
+
+/** Paid purchases in this game not yet marked delivered by our server. */
+export async function listUndeliveredPurchases() {
+  if (!purchasesSupported()) return [];
+  try { return await window.Vatar.purchases(); } catch { return []; }
+}
+
+/** Subscribe to purchases confirmed while no purchase() call was waiting. */
+export function onVatarPurchase(fn) {
+  if (!purchasesSupported()) return () => {};
+  const unsub = window.Vatar.onPurchase(fn);
+  vatar._unsubs.push(unsub);
+  return unsub;
+}
+
+/** Test helper. */
+export function _resetVatarForTests() {
+  vatar.ready = false; vatar.mode = null; vatar.player = null; vatar.error = null;
+  vatar._session = null; vatar._unsubs = [];
 }
